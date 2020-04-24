@@ -10,6 +10,15 @@ export const routeLineLayer = {
     "line-color": ["get", "color"] as Expression,
   },
 };
+export const routableTilesLayer = {
+  id: "routable-tiles-line",
+  type: "line",
+  paint: {
+    "line-opacity": ["coalesce", ["get", "opacity"], 0.5] as Expression,
+    "line-width": 2,
+    "line-color": "black",
+  },
+};
 
 export const routePointLayer = {
   id: "route-point",

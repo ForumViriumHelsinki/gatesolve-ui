@@ -21,12 +21,16 @@ import {
   routeLineLayer,
   allEntrancesLayer,
   allEntrancesSymbolLayer,
+  routableTilesLayer,
 } from "./map-style";
 import PinMarker from "./components/PinMarker";
 import { pinAsSVG } from "./components/Pin";
 import calculatePlan, { geometryToGeoJSON } from "./planner";
 import { queryEntrances, ElementWithCoordinates } from "./overpass";
 import { addImageSVG } from "./mapbox-utils";
+import routableTilesToGeoJSON from "./RoutableTilesToGeoJSON";
+import { getVisibleTiles } from "./minimal-xyz-viewer";
+
 import "./App.css";
 
 interface State {
@@ -35,6 +39,7 @@ interface State {
   destination: ElementWithCoordinates;
   entrances: Array<ElementWithCoordinates>;
   route: FeatureCollection;
+  routableTiles: Map<string, FeatureCollection | null>;
 }
 
 const latLngToDestination = (
@@ -63,6 +68,7 @@ const initialState: State = {
     bearing: 0,
     pitch: 0,
   },
+  routableTiles: new Map(),
 };
 
 const transformRequest = (originalURL?: string): MapRequest => {
@@ -134,6 +140,73 @@ const App: React.FC = () => {
   }) as match<{ from: string; to: string }>;
 
   const [state, setState] = useState(initialState);
+
+  useEffect(() => {
+    if (
+      !state.viewport.zoom ||
+      !state.viewport.width ||
+      !state.viewport.height
+    ) {
+      return; // Nothing to do yet
+    }
+    if (state.viewport.zoom < 12) return; // minzoom
+
+    // Calculate multiplier for under- or over-zoom
+    const tilesetZoomLevel = 14;
+    const zoomOffset = 1; // tiles are 512px (double the standard size)
+    const zoomMultiplier =
+      2 ** (tilesetZoomLevel - zoomOffset - state.viewport.zoom);
+
+    const visibleTiles = getVisibleTiles(
+      zoomMultiplier * state.viewport.width,
+      zoomMultiplier * state.viewport.height,
+      [state.viewport.longitude, state.viewport.latitude],
+      tilesetZoomLevel
+    );
+
+    // Initialise the new Map with nulls and available tiles from previous
+    const routableTiles = new Map();
+    visibleTiles.forEach(({ zoom, x, y }) => {
+      const key = `${zoom}/${x}/${y}`;
+      routableTiles.set(key, state.routableTiles.get(key) || null);
+    });
+
+    setState(
+      (prevState: State): State => {
+        return {
+          ...prevState,
+          routableTiles,
+        };
+      }
+    );
+
+    visibleTiles.map(async ({ zoom, x, y }) => {
+      const key = `${zoom}/${x}/${y}`;
+      if (routableTiles.get(key) !== null) return; // We already have the tile
+      // Fetch the tile
+      const response = await fetch(
+        `https://tile.olmap.org/routable-tiles/${zoom}/${x}/${y}`
+      );
+      const body = await response.json();
+      // Convert the tile to GeoJSON
+      const geoJSON = routableTilesToGeoJSON(body) as FeatureCollection;
+      // Add the tile if still needed based on latest state
+      setState(
+        (prevState: State): State => {
+          if (prevState.routableTiles.get(key) !== null) {
+            return prevState; // This tile is not needed anymore
+          }
+          const newRoutableTiles = new Map(prevState.routableTiles);
+          newRoutableTiles.set(key, geoJSON);
+          return {
+            ...prevState,
+            routableTiles: newRoutableTiles,
+          };
+        }
+      );
+    });
+  }, [state.viewport]); // eslint-disable-line react-hooks/exhaustive-deps
+  // XXX: state.routableTiles is missing above as we only use it as a cache here
 
   useEffect(() => {
     if (urlMatch) {
@@ -368,6 +441,24 @@ const App: React.FC = () => {
             }
           }}
         />
+        {Array.from(
+          state.routableTiles.entries(),
+          ([coords, tile]) =>
+            tile && (
+              <Source
+                key={coords}
+                id={`source-${coords}`}
+                type="geojson"
+                data={tile}
+              >
+                <Layer
+                  // eslint-disable-next-line react/jsx-props-no-spreading
+                  {...routableTilesLayer}
+                  id={coords}
+                />
+              </Source>
+            )
+        )}
         <Source
           id="osm-qa-tiles"
           type="vector"
@@ -398,6 +489,7 @@ const App: React.FC = () => {
             {...routePointSymbolLayer}
           />
         </Source>
+
         <PinMarker
           marker={{
             draggable: true,

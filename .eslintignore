@@ -8,3 +8,7 @@ src/react-app-env.d.ts
 # This file was created by Create React App so let's not lint it until we need
 # to touch it.
 src/serviceWorker.ts
+
+# Modules from external sources
+src/minimal-xyz-viewer.js
+src/RoutableTilesToGeoJSON.js
